@@ -1,0 +1,160 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInboundService")
+
+local player = Players.LocalPlayer
+local mouse = player:GetMouse()
+local camera = workspace.CurrentCamera
+
+-- CẤU HÌNH VÒNG TRÒN FOV
+local fovCircle = Drawing.new("Circle")
+fovCircle.Visible = true
+fovCircle.Radius = 220 
+fovCircle.Color = Color3.fromRGB(0, 255, 255)
+fovCircle.Thickness = 1
+fovCircle.Filled = false
+
+-- CẤU HÌNH KÍCH THƯỚC PHÓNG TO ĐẦU ĐỊCH (HITBOX)
+local HITBOX_SIZE = 5 -- Số càng lớn thì đầu địch càng to, càng dễ bắn trúng
+
+-- BẢNG LƯU TRỮ ĐƯỜNG CHỈ CỦA TẤT CẢ NGƯỜI CHƠI
+local Lines = {}
+
+local function removeAllESP(p)
+    if Lines[p] then Lines[p]:Destroy() Lines[p] = nil end
+    if p.Character then
+        if p.Character:FindFirstChild("EnemyHighlight") then p.Character.EnemyHighlight:Destroy() end
+        local head = p.Character:FindFirstChild("Head") or p.Character:FindFirstChild("head")
+        if head and head:FindFirstChild("HealthESP") then
+            head.HealthESP:Destroy()
+        end
+    end
+end
+
+Players.PlayerRemoving:Connect(removeAllESP)
+
+-- HÀM KIỂM TRA ĐỊCH CÓ NẰM SAU TƯỜNG KHÔNG
+local function isVisible(part, character)
+    if not part then return false end
+    local ignoreList = {player.Character, character, camera}
+    local raycastParams = RaycastParams.new()
+    raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+    raycastParams.FilterDescendantsInstances = ignoreList
+    
+    local direction = part.Position - camera.CFrame.Position
+    local raycastResult = workspace:Raycast(camera.CFrame.Position, direction, raycastParams)
+    
+    return raycastResult == nil
+end
+
+-- TÌM BỘ PHẬN ĐẦU CỦA ĐỊCH
+local function getTargetPart(character)
+    if not character then return nil end
+    return character:FindFirstChild("Head") or character:FindFirstChild("head")
+end
+
+-- TẠO BÓNG VÀ THANH MÁU XUYÊN TƯỜNG (KÍCH THƯỚC 1/3)
+local function applyVisualESP(v)
+    if not v.Character then return end
+    
+    if not v.Character:FindFirstChild("EnemyHighlight") then
+        local highlight = Instance.new("Highlight")
+        highlight.Name = "EnemyHighlight"
+        highlight.Adornee = v.Character
+        highlight.FillColor = Color3.fromRGB(255, 0, 0)
+        highlight.FillTransparency = 0.6
+        highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
+        highlight.OutlineTransparency = 0
+        highlight.Parent = v.Character
+    end
+    
+    local head = getTargetPart(v.Character)
+    if head and not head:FindFirstChild("HealthESP") then
+        local bbGui = Instance.new("BillboardGui")
+        bbGui.Name = "HealthESP"
+        bbGui.Adornee = head
+        bbGui.Size = UDim2.new(0, 35, 0, 5) 
+        bbGui.AlwaysOnTop = true
+        bbGui.StudsOffset = Vector3.new(0, 1.8, 0)
+        
+        local bg = Instance.new("Frame")
+        bg.Size = UDim2.new(1, 0, 1, 0)
+        bg.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+        bg.BorderSizePixel = 0
+        bg.Parent = bbGui
+        
+        local bar = Instance.new("Frame")
+        bar.Name = "HealthBar"
+        bar.Size = UDim2.new(1, 0, 1, 0)
+        bar.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
+        bar.BorderSizePixel = 0
+        bar.Parent = bg
+        
+        local text = Instance.new("TextLabel")
+        text.Name = "HealthText"
+        text.Size = UDim2.new(1, 0, 1, 0)
+        text.BackgroundTransparency = 1
+        text.TextColor3 = Color3.fromRGB(255, 255, 255)
+        text.TextSize = 8 
+        text.Font = Enum.Font.SourceSansBold
+        text.TextStrokeTransparency = 0
+        text.Parent = bg
+        
+        bbGui.Parent = head
+    end
+end
+
+-- TÌM MỤC TIÊU GẦN CHUỘT NHẤT TRONG VÒNG FOV
+local function getClosestPlayerToCursor()
+    local closestPlayer = nil
+    local shortestDistance = fovCircle.Radius
+    local allPlayers = Players:GetPlayers()
+    
+    for i = 1, #allPlayers do
+        local v = allPlayers[i]
+        if v ~= player and v.Character then
+            local targetPart = getTargetPart(v.Character)
+            if targetPart and isVisible(targetPart, v.Character) then
+                local humanoid = v.Character:FindFirstChildOfClass("Humanoid")
+                if humanoid and humanoid.Health > 0 then
+                    local pos, onScreen = camera:WorldToViewportPoint(targetPart.Position)
+                    if onScreen then
+                        local distance = (Vector2.new(mouse.X, mouse.Y) - Vector2.new(pos.X, pos.Y)).Magnitude
+                        if distance < shortestDistance then
+                            closestPlayer = v
+                            shortestDistance = distance
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return closestPlayer
+end
+
+-- VÒNG LẶP LIÊN TỤC CỦA HỆ THỐNG
+RunService.RenderStepped:Connect(function()
+    local screenCenter = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
+    fovCircle.Position = screenCenter
+    
+    local currentTarget = getClosestPlayerToCursor()
+    local allPlayers = Players:GetPlayers()
+    
+    for i = 1, #allPlayers do
+        local v = allPlayers[i]
+        if v ~= player then
+            local char = v.Character
+            local humanoid = char and char:FindFirstChildOfClass("Humanoid")
+            
+            if char and humanoid and humanoid.Health > 0 then
+                applyVisualESP(v)
+                
+                local head = getTargetPart(char)
+                if head then
+                    -- TÍNH NĂNG MỚI: Tự động phóng to kích thước đầu địch để tăng tỷ lệ bắn trúng
+                    head.Size = Vector3.new(HITBOX_SIZE, HITBOX_SIZE, HITBOX_SIZE)
+                    head.Transparency = 0.7 -- Làm mờ nhẹ phần phóng to để dễ nhìn
+                    head.CanCollide = false
+                    
+                    local bg = head:FindFirstChild("HealthESP") and head.HealthESP.Frame
+                    local bar = bg and bg:FindFirstChild("HealthBar")
